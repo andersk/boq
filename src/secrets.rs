@@ -6,6 +6,7 @@ pub struct Secrets {
     pub rabbitmq_password: String,
     pub secret_key: String,
     pub shared_secret: String,
+    pub avatar_salt: String,
 }
 
 impl Secrets {
@@ -25,6 +26,9 @@ impl Secrets {
             shared_secret: secrets_config
                 .get("secrets", "shared_secret")
                 .with_context(|| "missing shared_secret")?,
+            avatar_salt: secrets_config
+                .get("secrets", "avatar_salt")
+                .with_context(|| "missing avatar_salt")?,
         })
     }
 }

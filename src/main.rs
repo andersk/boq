@@ -5,6 +5,7 @@ mod app_server;
 mod app_state;
 mod auth;
 mod avatar;
+mod avatar_hash;
 mod debug;
 mod handlers;
 mod narrow;
@@ -16,6 +17,7 @@ mod response;
 mod secrets;
 mod shutdown;
 mod types;
+mod upload;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -24,6 +26,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::app_server::AppServer;
 use crate::app_state::AppState;
+use crate::avatar::AvatarSettings;
 use crate::queues::Queues;
 use crate::rabbitmq::RabbitMQ;
 use crate::secrets::Secrets;
@@ -40,6 +43,10 @@ struct Cli {
     rabbitmq_user: String,
     #[arg(long)]
     rabbitmq_notify_queue: String,
+    #[arg(long)]
+    enable_gravatar: bool,
+    #[arg(long)]
+    default_avatar_uri: String,
 }
 
 #[tokio::main]
@@ -55,6 +62,7 @@ async fn main() -> Result<()> {
         rabbitmq_password,
         secret_key,
         shared_secret,
+        avatar_salt,
     } = Secrets::load(args.secrets_file).with_context(|| "failed to load secrets")?;
 
     // TODO/boq: support non-development database configuration
@@ -80,6 +88,11 @@ async fn main() -> Result<()> {
     let state = Arc::new(AppState {
         shared_secret,
         secret_key,
+        avatar_settings: AvatarSettings {
+            enable_gravatar: args.enable_gravatar,
+            default_avatar_uri: args.default_avatar_uri,
+            avatar_salt,
+        },
         shutdown_rx,
         db_pool,
         queues: Mutex::new(Queues::new()),

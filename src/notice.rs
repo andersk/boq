@@ -10,7 +10,7 @@ use serde_json::value::RawValue;
 use serde_json::Value;
 
 use crate::app_state::AppState;
-use crate::avatar::get_avatar_field;
+use crate::avatar::{get_avatar_field, AvatarSettings, AvatarSource};
 use crate::notification_data::{NotificationTrigger, UserIdSets, UserMessageNotificationsData};
 use crate::queues::{Client, QueueId, Queues};
 use crate::types::{MessageFlags, MessageId, RealmId, UserGroupId, UserId};
@@ -104,7 +104,7 @@ pub struct WideMessage {
     avatar_url: (),
     sender_email_address_visibility: EmailAddressVisibility,
     sender_realm_id: RealmId,
-    sender_avatar_source: String,
+    sender_avatar_source: AvatarSource,
     sender_avatar_version: i32,
     #[serde(skip)]
     content_type: (),
@@ -153,6 +153,7 @@ impl WideMessage {
         }: &MessageFlavor,
         keep_rendered_content: bool,
         invite_only_stream: bool,
+        avatar_settings: &AvatarSettings,
     ) -> Message {
         if self.sender_email_address_visibility != EmailAddressVisibility::Everyone {
             // If email address of the sender is only available to
@@ -166,10 +167,11 @@ impl WideMessage {
             self.sender_id,
             self.sender_realm_id,
             self.sender_delivery_email.as_ref().unwrap(),
-            &self.sender_avatar_source,
+            self.sender_avatar_source,
             self.sender_avatar_version,
             false,
             client_gravatar,
+            avatar_settings,
         );
         let (content_type, content) = if apply_markdown {
             (ContentType::Html, &self.rendered_content)
@@ -388,6 +390,7 @@ fn enqueue_message_to_client(
     internal_data: Option<&MessageUserInternalData>,
     invite_only: bool,
     local_id: Option<&String>,
+    avatar_settings: &AvatarSettings,
 ) {
     if !client.accepts_messages() {
         // The actual check is the accepts_event() check below; this line is
@@ -406,7 +409,7 @@ fn enqueue_message_to_client(
         client_gravatar: client_info.client_gravatar,
     };
     let message = Arc::clone(flavor_cache.entry(flavor).or_insert_with_key(|flavor| {
-        Arc::new(wide_message.finalize_payload(flavor, false, invite_only_stream))
+        Arc::new(wide_message.finalize_payload(flavor, false, invite_only_stream, avatar_settings))
     }));
 
     let user_event = ClientEvent::Message {
@@ -579,6 +582,7 @@ fn process_message_event(
                         Some(&internal_data),
                         event_template.invite_only,
                         event_template.local_id.as_ref(),
+                        &state.avatar_settings,
                     );
                 }
             }
@@ -607,6 +611,7 @@ fn process_message_event(
                         None,
                         event_template.invite_only,
                         event_template.local_id.as_ref(),
+                        &state.avatar_settings,
                     );
                 }
             }
