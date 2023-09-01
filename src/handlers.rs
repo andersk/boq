@@ -17,7 +17,6 @@ use crate::app_error::AppError;
 use crate::app_state::AppState;
 use crate::auth::AuthContext;
 use crate::narrow::Narrow;
-use crate::notice::ClientEvent;
 use crate::queues::{ClientEventEntry, ClientInfo, QueueId};
 use crate::response::{json_error, json_error_code, json_success, ErrorCode};
 use crate::types::{RealmId, UserId};
