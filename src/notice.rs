@@ -370,7 +370,7 @@ fn maybe_enqueue_notifications(
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
-pub enum ClientEvent {
+pub enum SpecialClientEvent {
     Message {
         message: Arc<Message>,
         flags: MessageFlags,
@@ -414,6 +414,17 @@ pub enum ClientEvent {
     },
 }
 
+#[derive(Clone, Serialize)]
+#[serde(untagged)]
+pub enum ClientEvent {
+    Special(SpecialClientEvent),
+    Other {
+        r#type: String,
+        #[serde(flatten)]
+        attrs: Arc<HashMap<String, Value>>,
+    },
+}
+
 fn enqueue_message_to_client(
     wide_message: &WideMessage,
     flavor_cache: &mut HashMap<MessageFlavor, Arc<Message>>,
@@ -445,12 +456,12 @@ fn enqueue_message_to_client(
         Arc::new(wide_message.finalize_payload(flavor, false, invite_only_stream, avatar_settings))
     }));
 
-    let user_event = ClientEvent::Message {
+    let user_event = ClientEvent::Special(SpecialClientEvent::Message {
         message,
         flags: flags.clone(),
         internal_data: internal_data.cloned(),
         local_message_id: if is_sender { local_id.cloned() } else { None },
-    };
+    });
 
     if !client.accepts_event(&user_event) {
         return;
@@ -863,7 +874,7 @@ fn process_update_message_event(
         if let Some(client_keys) = queues.for_user(user_profile_id) {
             for client_key in client_keys.clone() {
                 let client = queues.get_mut(client_key);
-                let user_event = ClientEvent::UpdateMessage {
+                let user_event = ClientEvent::Special(SpecialClientEvent::UpdateMessage {
                     attrs: Arc::clone(&event_template.attrs),
                     stream_name: stream_name.clone(),
                     message_id,
@@ -871,7 +882,7 @@ fn process_update_message_event(
                     user_id: event_template.user_id,
                     flags: user_data.flags.clone(),
                     mentioned_user_group_id: user_data.mentioned_user_group_id,
-                };
+                });
                 if client.accepts_event(&user_event) {
                     client.add_event(user_event);
                 }
@@ -914,11 +925,11 @@ fn process_delete_message_event(
         }
     };
 
-    let user_event = ClientEvent::DeleteMessage {
+    let user_event = ClientEvent::Special(SpecialClientEvent::DeleteMessage {
         attrs: Arc::clone(&event.attrs),
         message_ids: Some(Arc::clone(&event.message_ids)),
         message_id: None,
-    };
+    });
 
     tracing::debug!("processing delete_message event {event:?} {user_ids:?}");
 
@@ -943,11 +954,12 @@ fn process_delete_message_event(
                 }
 
                 for &message_id in &*event.message_ids {
-                    let compatibility_event = ClientEvent::DeleteMessage {
-                        attrs: Arc::clone(&event.attrs),
-                        message_ids: None,
-                        message_id: Some(message_id),
-                    };
+                    let compatibility_event =
+                        ClientEvent::Special(SpecialClientEvent::DeleteMessage {
+                            attrs: Arc::clone(&event.attrs),
+                            message_ids: None,
+                            message_id: Some(message_id),
+                        });
                     client.add_event(compatibility_event);
                 }
             }
@@ -980,10 +992,10 @@ fn process_presence_event(state: &AppState, event: PresenceEvent, user_ids: Vec<
         tracing::warn!("Dropping some obsolete presence events after upgrade.");
     }
 
-    let slim_event = ClientEvent::Presence {
+    let slim_event = ClientEvent::Special(SpecialClientEvent::Presence {
         slim_presence: Arc::clone(&event.slim_presence),
         email: None,
-    };
+    });
 
     let mut queues = state.queues.lock().unwrap();
 
@@ -995,10 +1007,10 @@ fn process_presence_event(state: &AppState, event: PresenceEvent, user_ids: Vec<
                     if client.info().slim_presence {
                         client.add_event(slim_event.clone());
                     } else {
-                        let legacy_event = ClientEvent::Presence {
+                        let legacy_event = ClientEvent::Special(SpecialClientEvent::Presence {
                             slim_presence: Arc::clone(&event.slim_presence),
                             email: Some(event.email.clone()),
-                        };
+                        });
                         client.add_event(legacy_event);
                     }
                 }
@@ -1057,9 +1069,9 @@ fn process_custom_profile_fields_event(
         })
         .collect();
 
-    let user_event = ClientEvent::CustomProfileFields {
+    let user_event = ClientEvent::Special(SpecialClientEvent::CustomProfileFields {
         fields: event.fields,
-    };
+    });
 
     let mut queues = state.queues.lock().unwrap();
 
@@ -1071,9 +1083,10 @@ fn process_custom_profile_fields_event(
                     if client.info().pronouns_field_type_supported {
                         client.add_event(user_event.clone());
                     } else {
-                        let pronouns_type_unsupported_event = ClientEvent::CustomProfileFields {
-                            fields: Arc::clone(&pronouns_type_unsupported_fields),
-                        };
+                        let pronouns_type_unsupported_event =
+                            ClientEvent::Special(SpecialClientEvent::CustomProfileFields {
+                                fields: Arc::clone(&pronouns_type_unsupported_fields),
+                            });
                         client.add_event(pronouns_type_unsupported_event);
                     }
                 }
@@ -1099,8 +1112,33 @@ fn process_cleanup_queue_event(state: &AppState, event: CleanupQueueEvent, (user
     }
 }
 
-fn process_other_event(event: HashMap<String, Value>, users: Vec<UserId>) {
-    tracing::debug!("processing event {event:?} {users:?}");
+#[derive(Debug, Deserialize)]
+pub struct OtherEvent {
+    r#type: String,
+    #[serde(flatten)]
+    attrs: Arc<HashMap<String, Value>>,
+}
+
+fn process_other_event(state: &AppState, event: OtherEvent, user_ids: Vec<UserId>) {
+    tracing::debug!("processing event {event:?} {user_ids:?}");
+
+    let user_event = ClientEvent::Other {
+        r#type: event.r#type,
+        attrs: event.attrs,
+    };
+
+    let mut queues = state.queues.lock().unwrap();
+
+    for user_profile_id in user_ids {
+        if let Some(client_keys) = queues.for_user(user_profile_id) {
+            for client_key in client_keys.clone() {
+                let client = queues.get_mut(client_key);
+                if client.accepts_event(&user_event) {
+                    client.add_event(user_event.clone());
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1149,6 +1187,7 @@ pub fn process_notice(state: &Arc<AppState>, notice: Notice) -> Result<()> {
             process_cleanup_queue_event(state, event, serde_json::from_str(users.get())?)
         }
         Event::Other => process_other_event(
+            state,
             serde_json::from_str(event.get())?,
             serde_json::from_str(users.get())?,
         ),

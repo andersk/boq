@@ -8,7 +8,7 @@ use tokio::sync::oneshot::{channel, Receiver, Sender};
 use uuid::Uuid;
 
 use crate::narrow::{matches_narrow, Narrow};
-use crate::notice::ClientEvent;
+use crate::notice::{ClientEvent, OtherEvent, SpecialClientEvent};
 use crate::types::RealmId;
 use crate::types::UserId;
 
@@ -99,13 +99,47 @@ impl Client {
 
     pub fn accepts_event(&self, event: &ClientEvent) -> bool {
         match event {
-            ClientEvent::Message { message, flags, .. } => {
+            ClientEvent::Special(SpecialClientEvent::Message { message, flags, .. }) => {
                 self.accepts_type("message") && matches_narrow(message, flags, &self.info.narrow)
             }
-            ClientEvent::UpdateMessage { .. } => self.accepts_type("update_message"),
-            ClientEvent::DeleteMessage { .. } => self.accepts_type("delete_message"),
-            ClientEvent::Presence { .. } => self.accepts_type("presence"),
-            ClientEvent::CustomProfileFields { .. } => self.accepts_type("custom_profile_fields"),
+            ClientEvent::Special(SpecialClientEvent::UpdateMessage { .. }) => {
+                self.accepts_type("update_message")
+            }
+            ClientEvent::Special(SpecialClientEvent::DeleteMessage { .. }) => {
+                self.accepts_type("delete_message")
+            }
+            ClientEvent::Special(SpecialClientEvent::Presence { .. }) => {
+                self.accepts_type("presence")
+            }
+            ClientEvent::Special(SpecialClientEvent::CustomProfileFields { .. }) => {
+                self.accepts_type("custom_profile_fields")
+            }
+            ClientEvent::Other { r#type, .. } if !self.accepts_type(r#type) => false,
+            ClientEvent::Other { r#type, attrs } => {
+                match r#type.as_str() {
+                    // Suppress muted_topics events for clients that support
+                    // user_topic. This allows clients to request both the
+                    // user_topic and muted_topics event types, and receive the
+                    // duplicate muted_topics data only on older servers that
+                    // don't support user_topic.
+                    "muted_topics" => !self.accepts_type("user_topic"),
+                    // Typing notifications for stream messages are only
+                    // delivered if the stream_typing_notifications
+                    // client_capability is enabled, for backwards
+                    // compatibility.
+                    "typing" => {
+                        !attrs.contains_key("stream_id") || self.info.stream_typing_notifications
+                    }
+                    // 'update_display_settings' and
+                    // 'update_global_notifications' events are sent only if
+                    // user_settings_object is false, otherwise only
+                    // 'user_settings' event is sent.
+                    "update_display_settings" | "update_global_notifications" => {
+                        !self.info.user_settings_object
+                    }
+                    _ => true,
+                }
+            }
         }
     }
 
