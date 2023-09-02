@@ -403,6 +403,12 @@ pub enum ClientEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         message_id: Option<MessageId>,
     },
+    Presence {
+        #[serde(flatten)]
+        slim_presence: Arc<SlimPresence>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        email: Option<String>,
+    },
 }
 
 fn enqueue_message_to_client(
@@ -946,8 +952,56 @@ fn process_delete_message_event(
     }
 }
 
-fn process_presence_event(event: HashMap<String, Value>, users: Vec<UserId>) {
-    tracing::debug!("processing presence event {event:?} {users:?}");
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SlimPresence {
+    #[serde(default)]
+    user_id: Option<UserId>,
+    server_timestamp: f64,
+    presence: HashMap<String, Value>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PresenceEvent {
+    #[serde(flatten)]
+    slim_presence: Arc<SlimPresence>,
+    email: String,
+}
+
+fn process_presence_event(state: &AppState, event: PresenceEvent, user_ids: Vec<UserId>) {
+    tracing::debug!("processing presence event {event:?} {user_ids:?}");
+
+    if event.slim_presence.user_id.is_none() {
+        // We only recently added `user_id` to presence data. Any old events in
+        // our queue can just be dropped, since presence events are pretty
+        // ephemeral in nature.
+        tracing::warn!("Dropping some obsolete presence events after upgrade.");
+    }
+
+    let slim_event = ClientEvent::Presence {
+        slim_presence: Arc::clone(&event.slim_presence),
+        email: None,
+    };
+
+    let mut queues = state.queues.lock().unwrap();
+
+    for user_profile_id in user_ids {
+        if let Some(client_keys) = queues.for_user(user_profile_id) {
+            for client_key in client_keys.clone() {
+                let client = queues.get_mut(client_key);
+                if client.accepts_event(&slim_event) {
+                    if client.info().slim_presence {
+                        client.add_event(slim_event.clone());
+                    } else {
+                        let legacy_event = ClientEvent::Presence {
+                            slim_presence: Arc::clone(&event.slim_presence),
+                            email: Some(event.email.clone()),
+                        };
+                        client.add_event(legacy_event);
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn process_custom_profile_fields_event(event: HashMap<String, Value>, users: Vec<UserId>) {
@@ -969,7 +1023,7 @@ pub enum Event {
     Message(MessageEvent),
     UpdateMessage(UpdateMessageEvent),
     DeleteMessage(DeleteMessageEvent),
-    Presence(HashMap<String, Value>),
+    Presence(PresenceEvent),
     CustomProfileFields(HashMap<String, Value>),
     CleanupQueue(HashMap<String, Value>),
     #[serde(other)]
@@ -999,7 +1053,9 @@ pub fn process_notice(state: &Arc<AppState>, notice: Notice) -> Result<()> {
         Event::DeleteMessage(event) => {
             process_delete_message_event(state, event, serde_json::from_str(users.get())?)
         }
-        Event::Presence(event) => process_presence_event(event, serde_json::from_str(users.get())?),
+        Event::Presence(event) => {
+            process_presence_event(state, event, serde_json::from_str(users.get())?)
+        }
         Event::CustomProfileFields(event) => {
             process_custom_profile_fields_event(event, serde_json::from_str(users.get())?)
         }

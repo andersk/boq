@@ -104,6 +104,7 @@ impl Client {
             }
             ClientEvent::UpdateMessage { .. } => self.accepts_type("update_message"),
             ClientEvent::DeleteMessage { .. } => self.accepts_type("delete_message"),
+            ClientEvent::Presence { .. } => self.accepts_type("presence"),
         }
     }
 
