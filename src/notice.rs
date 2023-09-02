@@ -1082,9 +1082,21 @@ fn process_custom_profile_fields_event(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CleanupQueueEvent {
+    queue_id: QueueId,
+}
+
 /// This event may be generated to forward cleanup requests to the right shard.
-fn process_cleanup_queue_event(event: HashMap<String, Value>, (user,): (UserId,)) {
-    tracing::debug!("processing cleanup_queue event {event:?} {user:?}");
+fn process_cleanup_queue_event(state: &AppState, event: CleanupQueueEvent, (user_id,): (UserId,)) {
+    tracing::debug!("processing cleanup_queue event {event:?} {user_id:?}");
+    let mut queues = state.queues.lock().unwrap();
+    if !queues.delete(user_id, event.queue_id) {
+        tracing::info!(
+            "Ignoring cleanup request for bad queue id {queue_id} ({user_id})",
+            queue_id = event.queue_id,
+        );
+    }
 }
 
 fn process_other_event(event: HashMap<String, Value>, users: Vec<UserId>) {
@@ -1099,7 +1111,7 @@ pub enum Event {
     DeleteMessage(DeleteMessageEvent),
     Presence(PresenceEvent),
     CustomProfileFields(CustomProfileFieldsEvent),
-    CleanupQueue(HashMap<String, Value>),
+    CleanupQueue(CleanupQueueEvent),
     #[serde(other)]
     Other,
 }
@@ -1134,7 +1146,7 @@ pub fn process_notice(state: &Arc<AppState>, notice: Notice) -> Result<()> {
             process_custom_profile_fields_event(state, event, serde_json::from_str(users.get())?)
         }
         Event::CleanupQueue(event) => {
-            process_cleanup_queue_event(event, serde_json::from_str(users.get())?)
+            process_cleanup_queue_event(state, event, serde_json::from_str(users.get())?)
         }
         Event::Other => process_other_event(
             serde_json::from_str(event.get())?,
