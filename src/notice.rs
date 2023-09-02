@@ -409,6 +409,9 @@ pub enum ClientEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         email: Option<String>,
     },
+    CustomProfileFields {
+        fields: Arc<[CustomProfileField]>,
+    },
 }
 
 fn enqueue_message_to_client(
@@ -1004,8 +1007,79 @@ fn process_presence_event(state: &AppState, event: PresenceEvent, user_ids: Vec<
     }
 }
 
-fn process_custom_profile_fields_event(event: HashMap<String, Value>, users: Vec<UserId>) {
-    tracing::debug!("processing custom_profile_fields event {event:?} {users:?}");
+#[derive(Clone, Copy, Debug, Deserialize_repr, Eq, PartialEq, Serialize_repr)]
+#[repr(u8)]
+pub enum CustomProfileFieldType {
+    ShortText = 1,
+    LongText = 2,
+    Select = 3,
+    Date = 4,
+    Url = 5,
+    User = 6,
+    ExternalAccount = 7,
+    Pronouns = 8,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CustomProfileField {
+    id: i32,
+    r#type: CustomProfileFieldType,
+    order: i32,
+    name: String,
+    hint: String,
+    field_data: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    display_in_profile_summary: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CustomProfileFieldsEvent {
+    fields: Arc<[CustomProfileField]>,
+}
+
+fn process_custom_profile_fields_event(
+    state: &AppState,
+    event: CustomProfileFieldsEvent,
+    user_ids: Vec<UserId>,
+) {
+    tracing::debug!("processing custom_profile_fields event {event:?} {user_ids:?}");
+
+    let pronouns_type_unsupported_fields: Arc<[CustomProfileField]> = event
+        .fields
+        .iter()
+        .map(|field| CustomProfileField {
+            r#type: if field.r#type == CustomProfileFieldType::Pronouns {
+                CustomProfileFieldType::ShortText
+            } else {
+                field.r#type
+            },
+            ..field.clone()
+        })
+        .collect();
+
+    let user_event = ClientEvent::CustomProfileFields {
+        fields: event.fields,
+    };
+
+    let mut queues = state.queues.lock().unwrap();
+
+    for user_profile_id in user_ids {
+        if let Some(client_keys) = queues.for_user(user_profile_id) {
+            for client_key in client_keys.clone() {
+                let client = queues.get_mut(client_key);
+                if client.accepts_event(&user_event) {
+                    if client.info().pronouns_field_type_supported {
+                        client.add_event(user_event.clone());
+                    } else {
+                        let pronouns_type_unsupported_event = ClientEvent::CustomProfileFields {
+                            fields: Arc::clone(&pronouns_type_unsupported_fields),
+                        };
+                        client.add_event(pronouns_type_unsupported_event);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// This event may be generated to forward cleanup requests to the right shard.
@@ -1024,7 +1098,7 @@ pub enum Event {
     UpdateMessage(UpdateMessageEvent),
     DeleteMessage(DeleteMessageEvent),
     Presence(PresenceEvent),
-    CustomProfileFields(HashMap<String, Value>),
+    CustomProfileFields(CustomProfileFieldsEvent),
     CleanupQueue(HashMap<String, Value>),
     #[serde(other)]
     Other,
@@ -1057,7 +1131,7 @@ pub fn process_notice(state: &Arc<AppState>, notice: Notice) -> Result<()> {
             process_presence_event(state, event, serde_json::from_str(users.get())?)
         }
         Event::CustomProfileFields(event) => {
-            process_custom_profile_fields_event(event, serde_json::from_str(users.get())?)
+            process_custom_profile_fields_event(state, event, serde_json::from_str(users.get())?)
         }
         Event::CleanupQueue(event) => {
             process_cleanup_queue_event(event, serde_json::from_str(users.get())?)
