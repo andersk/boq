@@ -395,6 +395,14 @@ pub enum ClientEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         mentioned_user_group_id: Option<UserId>,
     },
+    DeleteMessage {
+        #[serde(flatten)]
+        attrs: Arc<HashMap<String, Value>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message_ids: Option<Arc<[MessageId]>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message_id: Option<MessageId>,
+    },
 }
 
 fn enqueue_message_to_client(
@@ -866,6 +874,13 @@ fn process_update_message_event(
 }
 
 #[derive(Debug, Deserialize)]
+pub struct DeleteMessageEvent {
+    #[serde(flatten)]
+    attrs: Arc<HashMap<String, Value>>,
+    message_ids: Arc<[MessageId]>,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LegacyDeleteMessageUser {
     id: UserId,
@@ -878,8 +893,57 @@ enum DeleteMessageUsers {
     LegacyUsers(Vec<LegacyDeleteMessageUser>),
 }
 
-fn process_delete_message_event(event: HashMap<String, Value>, users: DeleteMessageUsers) {
-    tracing::debug!("processing delete_message event {event:?} {users:?}");
+fn process_delete_message_event(
+    state: &AppState,
+    event: DeleteMessageEvent,
+    users: DeleteMessageUsers,
+) {
+    let user_ids = match users {
+        DeleteMessageUsers::Ids(user_ids) => user_ids,
+        DeleteMessageUsers::LegacyUsers(users) => {
+            users.into_iter().map(|user_data| user_data.id).collect()
+        }
+    };
+
+    let user_event = ClientEvent::DeleteMessage {
+        attrs: Arc::clone(&event.attrs),
+        message_ids: Some(Arc::clone(&event.message_ids)),
+        message_id: None,
+    };
+
+    tracing::debug!("processing delete_message event {event:?} {user_ids:?}");
+
+    let mut queues = state.queues.lock().unwrap();
+
+    for user_profile_id in user_ids {
+        if let Some(client_keys) = queues.for_user(user_profile_id) {
+            for client_key in client_keys.clone() {
+                let client = queues.get_mut(client_key);
+                if !client.accepts_event(&user_event) {
+                    continue;
+                }
+
+                // For clients which support message deletion in bulk, we send a
+                // list of msgs_ids together, otherwise we send a delete event
+                // for each message. All clients will be required to support
+                // bulk_message_deletion in the future; this logic is intended
+                // for backwards-compatibility only.
+                if client.info().bulk_message_deletion {
+                    client.add_event(user_event.clone());
+                    continue;
+                }
+
+                for &message_id in &*event.message_ids {
+                    let compatibility_event = ClientEvent::DeleteMessage {
+                        attrs: Arc::clone(&event.attrs),
+                        message_ids: None,
+                        message_id: Some(message_id),
+                    };
+                    client.add_event(compatibility_event);
+                }
+            }
+        }
+    }
 }
 
 fn process_presence_event(event: HashMap<String, Value>, users: Vec<UserId>) {
@@ -904,7 +968,7 @@ fn process_other_event(event: HashMap<String, Value>, users: Vec<UserId>) {
 pub enum Event {
     Message(MessageEvent),
     UpdateMessage(UpdateMessageEvent),
-    DeleteMessage(HashMap<String, Value>),
+    DeleteMessage(DeleteMessageEvent),
     Presence(HashMap<String, Value>),
     CustomProfileFields(HashMap<String, Value>),
     CleanupQueue(HashMap<String, Value>),
@@ -933,7 +997,7 @@ pub fn process_notice(state: &Arc<AppState>, notice: Notice) -> Result<()> {
             process_update_message_event(state, event, serde_json::from_str(users.get())?)?
         }
         Event::DeleteMessage(event) => {
-            process_delete_message_event(event, serde_json::from_str(users.get())?)
+            process_delete_message_event(state, event, serde_json::from_str(users.get())?)
         }
         Event::Presence(event) => process_presence_event(event, serde_json::from_str(users.get())?),
         Event::CustomProfileFields(event) => {
