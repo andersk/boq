@@ -138,11 +138,19 @@ pub struct Message {
     pub invite_only_stream: bool,
 }
 
+#[derive(Debug, Eq, Hash, PartialEq)]
+struct MessageFlavor {
+    apply_markdown: bool,
+    client_gravatar: bool,
+}
+
 impl WideMessage {
     fn finalize_payload(
         &self,
-        apply_markdown: bool,
-        mut client_gravatar: bool,
+        &MessageFlavor {
+            apply_markdown,
+            mut client_gravatar,
+        }: &MessageFlavor,
         keep_rendered_content: bool,
         invite_only_stream: bool,
     ) -> Message {
@@ -362,7 +370,7 @@ fn maybe_enqueue_notifications(
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum ClientEvent {
     Message {
-        message: Message,
+        message: Arc<Message>,
         flags: MessageFlags,
         #[serde(skip_serializing_if = "Option::is_none")]
         internal_data: Option<MessageUserInternalData>,
@@ -373,6 +381,7 @@ pub enum ClientEvent {
 
 fn enqueue_message_to_client(
     wide_message: &WideMessage,
+    flavor_cache: &mut HashMap<MessageFlavor, Arc<Message>>,
     client: &mut Client,
     flags: &MessageFlags,
     is_sender: bool,
@@ -392,12 +401,13 @@ fn enqueue_message_to_client(
     // Make sure Zephyr mirroring bots know whether stream is invite-only
     let invite_only_stream = client_info.client_type_name.contains("mirror") && invite_only;
 
-    let message = wide_message.finalize_payload(
-        client_info.apply_markdown,
-        client_info.client_gravatar,
-        false,
-        invite_only_stream,
-    );
+    let flavor = MessageFlavor {
+        apply_markdown: client_info.apply_markdown,
+        client_gravatar: client_info.client_gravatar,
+    };
+    let message = Arc::clone(flavor_cache.entry(flavor).or_insert_with_key(|flavor| {
+        Arc::new(wide_message.finalize_payload(flavor, false, invite_only_stream))
+    }));
 
     let user_event = ClientEvent::Message {
         message,
@@ -508,6 +518,7 @@ fn process_message_event(
         all_bot_user_ids: event_template.all_bot_user_ids,
     };
 
+    let mut flavor_cache = HashMap::new();
     let mut queues = state.queues.lock().unwrap();
 
     let processed_user_ids: HashSet<UserId> = users
@@ -561,6 +572,7 @@ fn process_message_event(
                     let is_sender = Some(client.queue_id) == event_template.sender_queue_id;
                     enqueue_message_to_client(
                         &wide_message,
+                        &mut flavor_cache,
                         client,
                         &user_data.flags,
                         is_sender,
@@ -588,6 +600,7 @@ fn process_message_event(
                     let is_sender = Some(client.queue_id) == event_template.sender_queue_id;
                     enqueue_message_to_client(
                         &wide_message,
+                        &mut flavor_cache,
                         client,
                         &MessageFlags::new(),
                         is_sender,
