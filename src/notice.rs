@@ -379,6 +379,22 @@ pub enum ClientEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         local_message_id: Option<String>,
     },
+    UpdateMessage {
+        #[serde(flatten)]
+        attrs: Arc<HashMap<String, Value>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stream_name: Option<String>,
+        message_id: MessageId,
+        // TODO/compatibility: Make this required when one can no longer directly
+        // update from 4.x to main.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rendering_only: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        user_id: Option<UserId>,
+        flags: MessageFlags,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mentioned_user_group_id: Option<UserId>,
+    },
 }
 
 fn enqueue_message_to_client(
@@ -621,8 +637,232 @@ fn process_message_event(
     Ok(())
 }
 
-fn process_update_message_event(event: HashMap<String, Value>, users: &RawValue) {
-    tracing::debug!("processing update_message event {event:?} {users:?}");
+#[derive(Debug, Deserialize)]
+pub struct UpdateMessageEvent {
+    #[serde(flatten)]
+    pub attrs: Arc<HashMap<String, Value>>,
+
+    #[serde(default)]
+    stream_name: Option<String>,
+    message_id: MessageId,
+    // TODO/compatibility: Make this required when one can no longer directly
+    // update from 4.x to main.
+    #[serde(default)]
+    rendering_only: Option<bool>,
+    #[serde(default)]
+    user_id: Option<UserId>,
+
+    #[serde(default)]
+    prior_mention_user_ids: HashSet<UserId>,
+    #[serde(default)]
+    presence_idle_user_ids: HashSet<UserId>,
+    // TODO/compatibility: Remove this alias when one can no longer directly
+    // upgrade from 7.x to main.
+    #[serde(default, alias = "pm_mention_push_disabled_user_ids")]
+    dm_mention_push_disabled_user_ids: HashSet<UserId>,
+    // TODO/compatibility: Remove this alias when one can no longer directly
+    // upgrade from 7.x to main.
+    #[serde(default, alias = "pm_mention_email_disabled_user_ids")]
+    dm_mention_email_disabled_user_ids: HashSet<UserId>,
+    #[serde(default)]
+    stream_push_user_ids: HashSet<UserId>,
+    #[serde(default)]
+    stream_email_user_ids: HashSet<UserId>,
+    #[serde(default)]
+    topic_wildcard_mention_user_ids: HashSet<UserId>,
+    // TODO/compatibility: Remove this alias when one can no longer directly
+    // upgrade from 7.x to main.
+    #[serde(default, alias = "wildcard_mention_user_ids")]
+    stream_wildcard_mention_user_ids: HashSet<UserId>,
+    #[serde(default)]
+    followed_topic_push_user_ids: HashSet<UserId>,
+    #[serde(default)]
+    followed_topic_email_user_ids: HashSet<UserId>,
+    #[serde(default)]
+    topic_wildcard_mention_in_followed_topic_user_ids: HashSet<UserId>,
+    #[serde(default)]
+    stream_wildcard_mention_in_followed_topic_user_ids: HashSet<UserId>,
+    #[serde(default)]
+    muted_sender_user_ids: HashSet<UserId>,
+    #[serde(default)]
+    all_bot_user_ids: HashSet<UserId>,
+    #[serde(default)]
+    disable_external_notifications: bool,
+    // TODO/compatibility: Remove this alias when one can no longer directly
+    // upgrade from 4.x to main.
+    #[serde(default, alias = "push_notify_user_ids")]
+    online_push_user_ids: HashSet<UserId>,
+}
+
+fn maybe_enqueue_notifications_for_message_update(
+    state: &Arc<AppState>,
+    queues: &Queues,
+    user_notifications_data: &UserMessageNotificationsData,
+    message_id: MessageId,
+    acting_user_id: UserId,
+    private_message: bool,
+    presence_idle: bool,
+    prior_mentioned: bool,
+) -> Result<()> {
+    if user_notifications_data.sender_is_muted {
+        // Never send notifications if the sender has been muted
+        return Ok(());
+    }
+
+    if private_message {
+        // We don't do offline notifications for direct messages, because we
+        // already notified the user of the original message.
+        return Ok(());
+    }
+
+    if prior_mentioned {
+        // Don't spam people with duplicate mentions.  This is especially
+        // important considering that most message edits are simple typo
+        // corrections.
+        //
+        // Note that prior_mention_user_ids contains users who received a
+        // wildcard mention as well as normal mentions.
+        //
+        // TODO: Ideally, that would mean that we exclude here cases where
+        // user_profile.wildcard_mentions_notify=False and have those still send
+        // a notification.  However, we don't have the data to determine whether
+        // or not that was the case at the time the original message was sent,
+        // so we can't do that without extending the UserMessage data model.
+        return Ok(());
+    }
+
+    if user_notifications_data.stream_push_notify
+        || user_notifications_data.stream_email_notify
+        || user_notifications_data.followed_topic_push_notify
+        || user_notifications_data.followed_topic_email_notify
+    {
+        // Currently we assume that if this flag is set to True, then the user
+        // already was notified about the earlier message, so we short circuit.
+        // We may handle this more rigorously in the future by looking at
+        // something like an AlreadyNotified model.
+        return Ok(());
+    }
+
+    let idle = presence_idle || receiver_is_off_zulip(queues, user_notifications_data.user_id);
+
+    // We don't yet support custom user group mentions for message edit
+    // notifications. Users will still receive notifications (because of the
+    // mentioned flag), but those will be as if they were mentioned personally.
+    let mentioned_user_group_id = None;
+
+    maybe_enqueue_notifications(
+        state,
+        user_notifications_data,
+        acting_user_id,
+        message_id,
+        mentioned_user_group_id,
+        idle,
+        &Notified::default(),
+    )?;
+    Ok(())
+}
+
+fn process_update_message_event(
+    state: &Arc<AppState>,
+    event_template: UpdateMessageEvent,
+    users: Vec<MessageUser>,
+) -> Result<()> {
+    tracing::debug!("processing update_message event {event_template:?} {users:?}");
+
+    let private_message = event_template.stream_name.is_none();
+    let user_id_sets = UserIdSets {
+        private_message,
+        disable_external_notifications: event_template.disable_external_notifications,
+        online_push_user_ids: event_template.online_push_user_ids,
+        dm_mention_push_disabled_user_ids: event_template.dm_mention_push_disabled_user_ids,
+        dm_mention_email_disabled_user_ids: event_template.dm_mention_email_disabled_user_ids,
+        stream_push_user_ids: event_template.stream_push_user_ids,
+        stream_email_user_ids: event_template.stream_email_user_ids,
+        topic_wildcard_mention_user_ids: event_template.topic_wildcard_mention_user_ids,
+        stream_wildcard_mention_user_ids: event_template.stream_wildcard_mention_user_ids,
+        followed_topic_push_user_ids: event_template.followed_topic_push_user_ids,
+        followed_topic_email_user_ids: event_template.followed_topic_email_user_ids,
+        topic_wildcard_mention_in_followed_topic_user_ids: event_template
+            .topic_wildcard_mention_in_followed_topic_user_ids,
+        stream_wildcard_mention_in_followed_topic_user_ids: event_template
+            .stream_wildcard_mention_in_followed_topic_user_ids,
+        muted_sender_user_ids: event_template.muted_sender_user_ids,
+        all_bot_user_ids: event_template.all_bot_user_ids,
+    };
+
+    let stream_name = event_template.stream_name;
+    let message_id = event_template.message_id;
+
+    // TODO/compatibility: Modern `update_message` events contain the
+    // rendering_only key, which indicates whether the update is a link preview
+    // rendering update (not a human action). However, because events may be in
+    // the notify_tornado queue at the time we upgrade, we need the below logic
+    // to compute rendering_only based on the `user_id` key not being present in
+    // legacy events that would have had rendering_only set. Remove this check
+    // when one can no longer directly update from 4.x to main.
+    let rendering_only_update = event_template
+        .rendering_only
+        .unwrap_or_else(|| event_template.user_id.is_none());
+
+    let mut queues = state.queues.lock().unwrap();
+
+    for user_data in users {
+        let user_profile_id = user_data.id;
+
+        // Events where `rendering_only_update` is true come from the
+        // do_update_embedded_data code path, and represent rendering previews;
+        // there should be no real content changes. Therefore, we know only
+        // events where `rendering_only_update` is false possibly send
+        // notifications.
+        if !rendering_only_update {
+            // The user we'll get here will be the sender if the message's
+            // content was edited, and the editor for topic edits. That's the
+            // correct "acting_user" for both cases.
+            let acting_user_id = event_template.user_id.unwrap();
+
+            let flags = &user_data.flags;
+            let user_notifications_data = UserMessageNotificationsData::from_user_id_sets(
+                user_profile_id,
+                &flags,
+                &user_id_sets,
+            );
+
+            maybe_enqueue_notifications_for_message_update(
+                state,
+                &queues,
+                &user_notifications_data,
+                message_id,
+                acting_user_id,
+                private_message,
+                event_template
+                    .presence_idle_user_ids
+                    .contains(&user_profile_id),
+                event_template
+                    .prior_mention_user_ids
+                    .contains(&user_profile_id),
+            )?;
+        }
+
+        if let Some(client_keys) = queues.for_user(user_profile_id) {
+            for client_key in client_keys.clone() {
+                let client = queues.get_mut(client_key);
+                let user_event = ClientEvent::UpdateMessage {
+                    attrs: Arc::clone(&event_template.attrs),
+                    stream_name: stream_name.clone(),
+                    message_id,
+                    rendering_only: event_template.rendering_only,
+                    user_id: event_template.user_id,
+                    flags: user_data.flags.clone(),
+                    mentioned_user_group_id: user_data.mentioned_user_group_id,
+                };
+                if client.accepts_event(&user_event) {
+                    client.add_event(user_event);
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -663,7 +903,7 @@ fn process_other_event(event: HashMap<String, Value>, users: Vec<UserId>) {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     Message(MessageEvent),
-    UpdateMessage(HashMap<String, Value>),
+    UpdateMessage(UpdateMessageEvent),
     DeleteMessage(HashMap<String, Value>),
     Presence(HashMap<String, Value>),
     CustomProfileFields(HashMap<String, Value>),
@@ -689,7 +929,9 @@ pub fn process_notice(state: &Arc<AppState>, notice: Notice) -> Result<()> {
         Event::Message(event) => {
             process_message_event(state, event, serde_json::from_str(users.get())?)?
         }
-        Event::UpdateMessage(event) => process_update_message_event(event, users),
+        Event::UpdateMessage(event) => {
+            process_update_message_event(state, event, serde_json::from_str(users.get())?)?
+        }
         Event::DeleteMessage(event) => {
             process_delete_message_event(event, serde_json::from_str(users.get())?)
         }

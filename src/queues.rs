@@ -102,6 +102,7 @@ impl Client {
             ClientEvent::Message { message, flags, .. } => {
                 self.accepts_type("message") && matches_narrow(message, flags, &self.info.narrow)
             }
+            ClientEvent::UpdateMessage { .. } => self.accepts_type("update_message"),
         }
     }
 
