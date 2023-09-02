@@ -118,8 +118,8 @@ async fn get_events_backend(
                 return Ok(bad_queue_id(&queue_id));
             };
 
-            if args.dont_block {
-                let events = client.queue.peek_events(args.last_event_id);
+            let events = client.queue.peek_events(args.last_event_id);
+            if !events.is_empty() || args.dont_block {
                 return Ok(get_events_response(events, queue_id));
             }
 
