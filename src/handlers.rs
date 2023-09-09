@@ -172,7 +172,7 @@ async fn get_events_backend(
                 vec![]
             }
         }
-        _ = shutdown_rx.wait() => vec![],
+        () = shutdown_rx.wait() => vec![],
     };
 
     Ok(get_events_response(events, queue_id))

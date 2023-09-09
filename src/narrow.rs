@@ -23,13 +23,13 @@ pub fn matches_narrow(message: &Message, flags: &MessageFlags, narrow: &Narrow) 
             MessageRecipient::Stream {
                 display_recipient, ..
             } => operand.to_lowercase() == display_recipient.to_lowercase(),
-            _ => false,
+            MessageRecipient::Private { .. } => false,
         },
         Operator::Topic => match &message.recipient {
             MessageRecipient::Stream { subject, .. } => {
                 operand.to_lowercase() == subject.to_lowercase()
             }
-            _ => false,
+            MessageRecipient::Private { .. } => false,
         },
         Operator::Sender => operand.to_lowercase() == message.sender_email.to_lowercase(),
         Operator::Is => match operand.as_str() {
@@ -41,7 +41,7 @@ pub fn matches_narrow(message: &Message, flags: &MessageFlags, narrow: &Narrow) 
                 MessageRecipient::Stream { subject, .. } => {
                     subject.starts_with(RESOLVED_TOPIC_PREFIX)
                 }
-                _ => false,
+                MessageRecipient::Private { .. } => false,
             },
             _ => true,
         },

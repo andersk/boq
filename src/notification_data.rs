@@ -191,15 +191,9 @@ impl UserMessageNotificationsData {
     /// independent of users' notification settings and thus don't depend on
     /// what type of notification (email/push) it is.
     fn trivially_should_not_notify(&self, acting_user_id: UserId) -> bool {
-        if self.user_id == acting_user_id {
-            true
-        } else if self.sender_is_muted {
-            true
-        } else if self.disable_external_notifications {
-            true
-        } else {
-            false
-        }
+        self.user_id == acting_user_id
+            || self.sender_is_muted
+            || self.disable_external_notifications
     }
 
     pub fn is_notifiable(&self, acting_user_id: UserId, idle: bool) -> bool {
@@ -217,9 +211,8 @@ impl UserMessageNotificationsData {
         acting_user_id: UserId,
         idle: bool,
     ) -> Option<NotificationTrigger> {
-        if !idle && !self.online_push_enabled {
-            None
-        } else if self.trivially_should_not_notify(acting_user_id) {
+        if (!idle && !self.online_push_enabled) || self.trivially_should_not_notify(acting_user_id)
+        {
             None
         }
         // The order here is important. If, for example, both
@@ -256,9 +249,7 @@ impl UserMessageNotificationsData {
         acting_user_id: UserId,
         idle: bool,
     ) -> Option<NotificationTrigger> {
-        if !idle {
-            None
-        } else if self.trivially_should_not_notify(acting_user_id) {
+        if !idle || self.trivially_should_not_notify(acting_user_id) {
             None
         }
         // The order here is important. If, for example, both

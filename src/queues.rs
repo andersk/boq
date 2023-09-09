@@ -8,7 +8,7 @@ use tokio::sync::oneshot::{channel, Receiver, Sender};
 use uuid::Uuid;
 
 use crate::narrow::{matches_narrow, Narrow};
-use crate::notice::{ClientEvent, OtherEvent, SpecialClientEvent};
+use crate::notice::{ClientEvent, SpecialClientEvent};
 use crate::types::RealmId;
 use crate::types::UserId;
 
@@ -197,12 +197,12 @@ impl Queues {
             .is_none());
         self.user_clients
             .entry(user_id)
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(client_key);
         if all_public_streams || !narrow_empty {
             self.realm_clients_all_streams
                 .entry(realm_id)
-                .or_insert_with(HashSet::new)
+                .or_default()
                 .insert(client_key);
         }
 

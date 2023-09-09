@@ -293,8 +293,8 @@ enum OfflinePushNotice {
     },
 }
 
-/// See https://zulip.readthedocs.io/en/latest/subsystems/notifications.html for
-/// high-level design documentation.
+/// See <https://zulip.readthedocs.io/en/latest/subsystems/notifications.html>
+/// for high-level design documentation.
 fn maybe_enqueue_notifications(
     state: &Arc<AppState>,
     user_notifications_data: &UserMessageNotificationsData,
@@ -477,7 +477,8 @@ fn enqueue_message_to_client(
     client.add_event(user_event);
 }
 
-/// See https://zulip.readthedocs.io/en/latest/subsystems/sending-messages.html
+/// See
+/// <https://zulip.readthedocs.io/en/latest/subsystems/sending-messages.html>
 /// for high-level documentation on this subsystem.
 fn process_message_event(
     state: &Arc<AppState>,
@@ -580,7 +581,7 @@ fn process_message_event(
             // more immediately
             let user_notifications_data = UserMessageNotificationsData::from_user_id_sets(
                 user_profile_id,
-                &flags,
+                flags,
                 &user_id_sets,
             );
 
@@ -851,7 +852,7 @@ fn process_update_message_event(
             let flags = &user_data.flags;
             let user_notifications_data = UserMessageNotificationsData::from_user_id_sets(
                 user_profile_id,
-                &flags,
+                flags,
                 &user_id_sets,
             );
 
@@ -1169,28 +1170,30 @@ pub fn process_notice(state: &Arc<AppState>, notice: Notice) -> Result<()> {
 
     match serde_json::from_str::<Event>(event.get())? {
         Event::Message(event) => {
-            process_message_event(state, event, serde_json::from_str(users.get())?)?
+            process_message_event(state, event, serde_json::from_str(users.get())?)?;
         }
         Event::UpdateMessage(event) => {
-            process_update_message_event(state, event, serde_json::from_str(users.get())?)?
+            process_update_message_event(state, event, serde_json::from_str(users.get())?)?;
         }
         Event::DeleteMessage(event) => {
-            process_delete_message_event(state, event, serde_json::from_str(users.get())?)
+            process_delete_message_event(state, event, serde_json::from_str(users.get())?);
         }
         Event::Presence(event) => {
-            process_presence_event(state, event, serde_json::from_str(users.get())?)
+            process_presence_event(state, event, serde_json::from_str(users.get())?);
         }
         Event::CustomProfileFields(event) => {
-            process_custom_profile_fields_event(state, event, serde_json::from_str(users.get())?)
+            process_custom_profile_fields_event(state, event, serde_json::from_str(users.get())?);
         }
         Event::CleanupQueue(event) => {
-            process_cleanup_queue_event(state, event, serde_json::from_str(users.get())?)
+            process_cleanup_queue_event(state, event, serde_json::from_str(users.get())?);
         }
-        Event::Other => process_other_event(
-            state,
-            serde_json::from_str(event.get())?,
-            serde_json::from_str(users.get())?,
-        ),
+        Event::Other => {
+            process_other_event(
+                state,
+                serde_json::from_str(event.get())?,
+                serde_json::from_str(users.get())?,
+            );
+        }
     }
 
     Ok(())

@@ -117,7 +117,7 @@ impl RabbitMQ {
                     };
                     self.handle_delivery(&state, delivery?).await?;
                 }
-                _ = shutdown_rx.wait() => break,
+                () = shutdown_rx.wait() => break,
             }
         }
         Ok(())
