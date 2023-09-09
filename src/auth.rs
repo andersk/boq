@@ -96,6 +96,8 @@ pub async fn django_session_auth<B>(
     TypedHeader(cookie): TypedHeader<Cookie>,
     mut req: Request<B>,
 ) -> Result<Request<B>, Result<Response, AppError>> {
+    // TODO/boq: CSRF protection
+
     if let Some(auth_context) = authenticate_django_session(&state, cookie)
         .await
         .map_err(|err| Err(err.into()))?
