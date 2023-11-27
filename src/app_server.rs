@@ -1,11 +1,13 @@
 use anyhow::Result;
 use axum::middleware;
-use axum::routing::IntoMakeService;
 use axum::routing::{get, post};
-use axum::{Router, Server};
-use hyper::server::conn::AddrIncoming;
+use axum::Router;
+use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
+use std::pin::pin;
 use std::sync::Arc;
+use tokio::net::TcpListener;
+use tower_service::Service;
 
 use crate::app_state::AppState;
 use crate::auth::{api_auth, django_session_auth};
@@ -14,12 +16,13 @@ use crate::handlers;
 use crate::shutdown;
 
 pub struct AppServer {
-    server: Server<AddrIncoming, IntoMakeService<Router>>,
+    app: Router,
+    listener: TcpListener,
     shutdown_rx: shutdown::Receiver,
 }
 
 impl AppServer {
-    pub fn new(address: &SocketAddr, state: Arc<AppState>) -> Result<AppServer> {
+    pub async fn new(address: &SocketAddr, state: Arc<AppState>) -> Result<AppServer> {
         let shutdown_rx = state.shutdown_rx.clone();
 
         let app = Router::new()
@@ -47,18 +50,43 @@ impl AppServer {
             .with_state(state)
             .layer(middleware::from_fn(print_request_response));
 
-        let server = Server::try_bind(address)?.serve(app.into_make_service());
-        tracing::info!("listening on {address}", address = server.local_addr());
+        let listener = TcpListener::bind(address).await?;
+        tracing::info!("listening on {address}", address = listener.local_addr()?);
         Ok(AppServer {
-            server,
+            app,
+            listener,
             shutdown_rx,
         })
     }
 
     pub async fn run(mut self) -> Result<()> {
-        self.server
-            .with_graceful_shutdown(self.shutdown_rx.wait())
-            .await?;
-        Ok(())
+        loop {
+            let (socket, _remote_addr) = tokio::select! {
+                 result = self.listener.accept() => result?,
+                 () = self.shutdown_rx.wait() => return Ok(()),
+            };
+            let app = self.app.clone();
+            let mut shutdown_rx = self.shutdown_rx.clone();
+            tokio::spawn(async move {
+                let socket = TokioIo::new(socket);
+                let hyper_service =
+                    hyper::service::service_fn(move |request| app.clone().call(request));
+                let conn = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(socket, hyper_service)
+                    .with_upgrades();
+                let mut conn = pin!(conn);
+                loop {
+                    tokio::select! {
+                        result = conn.as_mut() => {
+                            if let Err(err) = result {
+                                tracing::debug!("failed to serve connection: {err:#}");
+                            }
+                            break;
+                        }
+                        () = shutdown_rx.wait() => conn.as_mut().graceful_shutdown(),
+                    }
+                }
+            });
+        }
     }
 }

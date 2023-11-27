@@ -100,6 +100,7 @@ async fn main() -> Result<()> {
     });
 
     let server = AppServer::new(&args.address, Arc::clone(&state))
+        .await
         .with_context(|| "failed to start server")?;
 
     let (rabbitmq_result, server_result) = tokio::join!(

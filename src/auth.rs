@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use axum::extract::State;
-use axum::extract::TypedHeader;
-use axum::headers::Cookie;
 use axum::http::Request;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::response::Response;
+use axum_extra::extract::TypedHeader;
+use axum_extra::headers::Cookie;
 use constant_time_eq::constant_time_eq;
 use django_signing::Signer;
 use hmac::Hmac;
