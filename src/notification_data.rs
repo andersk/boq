@@ -123,19 +123,19 @@ impl UserMessageNotificationsData {
             let topic_wildcard_mention_email_notify = topic_wildcard_mention_user_ids
                 .contains(&user_id)
                 && !dm_mention_email_disabled_user_ids.contains(&user_id)
-                && flags.contains("wildcard_mentioned");
+                && flags.contains("topic_wildcard_mentioned");
             let stream_wildcard_mention_email_notify = stream_wildcard_mention_user_ids
                 .contains(&user_id)
                 && !dm_mention_email_disabled_user_ids.contains(&user_id)
-                && flags.contains("wildcard_mentioned");
+                && flags.contains("stream_wildcard_mentioned");
             let topic_wildcard_mention_in_followed_topic_email_notify =
                 topic_wildcard_mention_in_followed_topic_user_ids.contains(&user_id)
                     && !dm_mention_email_disabled_user_ids.contains(&user_id)
-                    && flags.contains("wildcard_mentioned");
+                    && flags.contains("topic_wildcard_mentioned");
             let stream_wildcard_mention_in_followed_topic_email_notify =
                 stream_wildcard_mention_in_followed_topic_user_ids.contains(&user_id)
                     && !dm_mention_email_disabled_user_ids.contains(&user_id)
-                    && flags.contains("wildcard_mentioned");
+                    && flags.contains("stream_wildcard_mentioned");
 
             let dm_push_notify =
                 !dm_mention_push_disabled_user_ids.contains(&user_id) && private_message;
@@ -144,19 +144,19 @@ impl UserMessageNotificationsData {
             let topic_wildcard_mention_push_notify = topic_wildcard_mention_user_ids
                 .contains(&user_id)
                 && !dm_mention_push_disabled_user_ids.contains(&user_id)
-                && flags.contains("wildcard_mentioned");
+                && flags.contains("topic_wildcard_mentioned");
             let stream_wildcard_mention_push_notify = stream_wildcard_mention_user_ids
                 .contains(&user_id)
                 && !dm_mention_push_disabled_user_ids.contains(&user_id)
-                && flags.contains("wildcard_mentioned");
+                && flags.contains("stream_wildcard_mentioned");
             let topic_wildcard_mention_in_followed_topic_push_notify =
                 topic_wildcard_mention_in_followed_topic_user_ids.contains(&user_id)
                     && !dm_mention_push_disabled_user_ids.contains(&user_id)
-                    && flags.contains("wildcard_mentioned");
+                    && flags.contains("topic_wildcard_mentioned");
             let stream_wildcard_mention_in_followed_topic_push_notify =
                 stream_wildcard_mention_in_followed_topic_user_ids.contains(&user_id)
                     && !dm_mention_push_disabled_user_ids.contains(&user_id)
-                    && flags.contains("wildcard_mentioned");
+                    && flags.contains("stream_wildcard_mentioned");
 
             UserMessageNotificationsData {
                 user_id,
